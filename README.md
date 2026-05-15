@@ -1,4 +1,4 @@
-# A **local?only UX wrapper** Around A Private Ollama LLM 
+# A **local-only UX wrapper** Around A Private Ollama LLM 
 ---
 
 ## **High?Level Architecture**
@@ -28,7 +28,7 @@ Purpose: navigation, model switching, settings, and utility tools.
 
 **Sections**
 1. **Header**
-   - App name (e.g., ìLocal LLM Studioî)
+   - App name (e.g., ‚ÄúLocal LLM Studio‚Äù)
    - Small status indicator (green = Ollama running)
 
 2. **Navigation Items**
@@ -40,7 +40,7 @@ Purpose: navigation, model switching, settings, and utility tools.
 
 3. **Footer**
    - Version info
-   - ìLocal modeî badge
+   - ‚ÄúLocal mode‚Äù badge
    - Optional: toggle dark/light mode
 
 **Behavior**
@@ -67,7 +67,7 @@ Purpose: navigation, model switching, settings, and utility tools.
 
 **Bottom Input Bar**
 - Multiline text input  
-- ìSendî button  
+- ‚ÄúSend‚Äù button  
 - Keyboard: Enter = send, Shift+Enter = newline  
 - Optional: file upload for context injection  
 
