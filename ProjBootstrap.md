@@ -733,4 +733,288 @@ npm run dev
 
 Then open `http://localhost:5173` in your browser—vertical navbar on the left, interactive prompt I/O on the right, all local to your Ubuntu box.
 
-If you want next: we can add streaming, system prompt editor, or a Models page wired to `/api/models`.
+---
+
+# streaming, system prompt editor, or a Models page wired to `/api/models`.
+
+Absolutely — let’s evolve your scaffold into a **full‑featured local LLM app** with:
+
+1. **Streaming responses (SSE‑style)**
+2. **A system‑prompt editor (collapsible panel)**
+3. **A Models page wired to `/api/models`**
+
+I’ll give you **drop‑in upgrades** to your existing scaffold so you can paste them directly into your project.
+
+---
+
+# **1. Add Streaming Support (Backend + Frontend)**
+
+Ollama supports streaming via chunked responses. We’ll expose a streaming endpoint:
+
+---
+
+## **Backend: `/api/stream` (Server‑Sent Events)**  
+Replace your `POST /api/generate` with this new streaming route (keep the old one if you want both).
+
+### **server/src/index.ts — add this route**
+```ts
+import axios from "axios";
+
+app.post("/api/stream", async (req, res) => {
+  const { model, prompt, system, temperature } = req.body;
+
+  res.setHeader("Content-Type", "text/event-stream");
+  res.setHeader("Cache-Control", "no-cache");
+  res.setHeader("Connection", "keep-alive");
+
+  try {
+    const response = await axios.post(
+      `${process.env.OLLAMA_URL || "http://localhost:11434"}/api/generate`,
+      {
+        model,
+        prompt,
+        system,
+        temperature: temperature ?? 0.7,
+        stream: true
+      },
+      { responseType: "stream" }
+    );
+
+    response.data.on("data", (chunk: Buffer) => {
+      const lines = chunk.toString().trim().split("\n");
+      for (const line of lines) {
+        if (!line.startsWith("data:")) continue;
+        const json = JSON.parse(line.replace("data:", "").trim());
+        if (json.response) {
+          res.write(`data: ${JSON.stringify({ token: json.response })}\n\n`);
+        }
+      }
+    });
+
+    response.data.on("end", () => {
+      res.write("data: [DONE]\n\n");
+      res.end();
+    });
+  } catch (err) {
+    console.error(err);
+    res.write(`data: ${JSON.stringify({ error: "stream failed" })}\n\n`);
+    res.end();
+  }
+});
+```
+
+---
+
+## **Frontend: Streaming API helper**
+
+### `client/src/api.ts — add this`
+```ts
+export async function streamGenerate(
+  model: string,
+  prompt: string,
+  system: string,
+  onToken: (token: string) => void
+): Promise<void> {
+  const res = await fetch("/api/stream", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ model, prompt, system })
+  });
+
+  const reader = res.body!.getReader();
+  const decoder = new TextDecoder();
+
+  while (true) {
+    const { value, done } = await reader.read();
+    if (done) break;
+
+    const text = decoder.decode(value);
+    const lines = text.split("\n");
+
+    for (const line of lines) {
+      if (!line.startsWith("data:")) continue;
+      const payload = line.replace("data:", "").trim();
+      if (payload === "[DONE]") return;
+
+      const json = JSON.parse(payload);
+      if (json.token) onToken(json.token);
+    }
+  }
+}
+```
+
+---
+
+## **ChatPane: Replace generate() with streaming**
+
+### `client/src/components/ChatPane.tsx — replace handleSend()`
+```tsx
+const handleSend = async (content: string) => {
+  const userMsg: ChatMessage = { role: "user", content };
+  setMessages(prev => [...prev, userMsg]);
+
+  const assistantMsg: ChatMessage = { role: "assistant", content: "" };
+  setMessages(prev => [...prev, assistantMsg]);
+
+  setLoading(true);
+
+  await streamGenerate(
+    model,
+    content,
+    systemPrompt,
+    (token) => {
+      assistantMsg.content += token;
+      setMessages(prev => [...prev.slice(0, -1), { ...assistantMsg }]);
+    }
+  );
+
+  setLoading(false);
+};
+```
+
+---
+
+# **2. Add a System Prompt Editor (Collapsible Panel)**
+
+### **ChatPane: add state**
+```tsx
+const [systemPrompt, setSystemPrompt] = useState("You are a helpful assistant.");
+const [showSystem, setShowSystem] = useState(false);
+```
+
+### **Chat header — add toggle**
+```tsx
+<button
+  style={{ marginLeft: "auto" }}
+  className="button-primary"
+  onClick={() => setShowSystem(!showSystem)}
+>
+  System Prompt
+</button>
+```
+
+### **Below header — collapsible editor**
+```tsx
+{showSystem && (
+  <div style={{ padding: 12, borderBottom: "1px solid var(--border)" }}>
+    <textarea
+      className="input-textarea"
+      style={{ minHeight: 80 }}
+      value={systemPrompt}
+      onChange={(e) => setSystemPrompt(e.target.value)}
+    />
+  </div>
+)}
+```
+
+---
+
+# **3. Add a Models Page wired to `/api/models`**
+
+You already have the API. Now add a page.
+
+---
+
+## **Sidebar: make “Models” clickable**
+
+### `Sidebar.tsx`
+```tsx
+const [active, setActive] = useState("chat");
+
+<div
+  className={`sidebar-item ${active === "chat" ? "active" : ""}`}
+  onClick={() => setActive("chat")}
+>
+  Chat
+</div>
+
+<div
+  className={`sidebar-item ${active === "models" ? "active" : ""}`}
+  onClick={() => setActive("models")}
+>
+  Models
+</div>
+```
+
+Pass `active` to Layout.
+
+---
+
+## **Layout: switch between pages**
+
+### `Layout.tsx`
+```tsx
+export const Layout: React.FC = () => {
+  const [page, setPage] = useState("chat");
+
+  return (
+    <div className="app-root">
+      <Sidebar onNavigate={setPage} />
+      {page === "chat" && <ChatPane />}
+      {page === "models" && <ModelsPage />}
+    </div>
+  );
+};
+```
+
+---
+
+## **ModelsPage component**
+
+### `client/src/components/ModelsPage.tsx`
+```tsx
+import React, { useEffect, useState } from "react";
+import { fetchModels } from "../api";
+
+export const ModelsPage: React.FC = () => {
+  const [models, setModels] = useState<string[]>([]);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    fetchModels().then(setModels).finally(() => setLoading(false));
+  }, []);
+
+  return (
+    <main className="main-pane">
+      <div className="chat-header">
+        <span style={{ fontWeight: 500 }}>Installed Models</span>
+      </div>
+
+      <div className="chat-body">
+        {loading && <div>Loading…</div>}
+        {!loading && models.length === 0 && <div>No models installed.</div>}
+        {!loading &&
+          models.map((m) => (
+            <div
+              key={m}
+              style={{
+                padding: "10px 12px",
+                borderBottom: "1px solid var(--border)"
+              }}
+            >
+              {m}
+            </div>
+          ))}
+      </div>
+    </main>
+  );
+};
+```
+
+---
+
+# **What you now have**
+Your app now includes:
+
+### ✔ **Streaming LLM responses**  
+Smooth, token‑by‑token output like ChatGPT.
+
+### ✔ **System prompt editor**  
+Fully local, collapsible, editable.
+
+### ✔ **Models page**  
+Lists all installed Ollama models.
+
+### ✔ **Still 100% offline**  
+No cloud calls, no telemetry, no external dependencies.
+
